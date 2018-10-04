@@ -1,0 +1,248 @@
+<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>增量更新 | Hexo</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">增量更新</h1><a id="logo" href="/.">Hexo</a><p class="description"></p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> Start</i></a><a href="/archives/"><i class="fa fa-archive"> Archiv</i></a><a href="/about/"><i class="fa fa-user"> Über</i></a><a href="/atom.xml"><i class="fa fa-rss"> RSS</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">增量更新</h1><div class="post-meta">Oct 2, 2018</div><div class="post-content"><p>Android应用增量更新 - Smart App Updates</p>
+<p>介绍</p>
+<p>你所看到的，是一个用于Android应用程序增量更新的库。</p>
+<p>包括客户端、服务端两部分代码。</p>
+<p>原理</p>
+<p>自从 Android 4.1 开始， Google Play 引入了应用程序的增量更新功能，App使用该升级方式，可节省约2/3的流量。</p>
+<p>Smart app updates is a new feature of Google Play that introduces a better way of delivering app updates to devices. When developers publish an update, Google Play now delivers only the bits that have changed to<br> devices, rather than the entire APK. This makes the updates much lighter-weight in most cases, so they are faster to download, save the device’s battery, and conserve bandwidth usage on users’ mobile data plan. On average, a smart app update is about 1/3 the<br> sizeof a full APK update.</p>
+<p>现在国内主流的应用市场也都支持应用的增量更新了。</p>
+<p>增量更新的原理，就是将手机上已安装apk与服务器端最新apk进行二进制对比，得到差分包，用户更新程序时，只需要下载差分包，并在本地使用差分包与已安装apk，合成新版apk。</p>
+<p>例如，当前手机中已安装微博V1，大小为12.8MB，现在微博发布了最新版V2，大小为15.4MB，我们对两个版本的apk文件差分比对之后，发现差异只有3M，那么用户就只需要要下载一个3M的差分包，使用旧版apk与这个差分包，合成得到一个新版本apk，提醒用户安装即可，不需要整包下载15.4M的微博V2版apk。</p>
+<p>apk文件的差分、合成，可以通过 开源的二进制比较工具 bsdiff 来实现，又因为bsdiff依赖bzip2，所以我们还需要用到 bzip2</p>
+<p>bsdiff中，bsdiff.c 用于生成差分包，bspatch.c 用于合成文件。</p>
+<p>弄清楚原理之后，我们想实现增量更新，共需要做3件事：</p>
+<p>在服务器端，生成两个版本apk的差分包；</p>
+<p>在手机客户端，使用已安装的apk与这个差分包进行合成，得到新版的微博apk；</p>
+<p>校验新合成的apk文件是否完整，MD5或SHA1是否正确，如正确，则引导用户安装；</p>
+<p>过程分析</p>
+<p>1 生成差分包</p>
+<p>这一步需要在服务器端来实现，一般来说，每当apk有新版本需要提示用户升级，都需要运营人员在后台管理端上传新apk，上传时就应该由程序生成与之前所有旧版本们与最新版的差分包。</p>
+<p>例如： 你的apk已经发布了3个版，V1.0、V2.0、V3.0，这时候你要在后台发布V4.0，那么，当你在服务器上传最新的V4.0包时，服务器端就应该立即生成以下差分包：<br>V1.0 ——&gt; V4.0的差分包；V2.0 ——&gt; V4.0的差分包；V3.0 ——&gt; V4.0的差分包；<br>ApkPatchLibraryServer 工程即为 Java 语言实现的服务器端差分程序。</p>
+<p>下面对ApkPatchLibraryServer做一些简单说明：</p>
+<p>1.1 C部分</p>
+<p>ApkPatchLibraryServer/jni 中，除了以下4个：</p>
+<p>com_cundong_utils_DiffUtils.c</p>
+<p>com_cundong_utils_DiffUtils.h</p>
+<p>com_cundong_utils_PatchUtils.c</p>
+<p>com_cundong_utils_PatchUtils.h</p>
+<p>jni/bzip2目录中的文件，全部来自bzip2项目。</p>
+<p>com_cundong_utils_DiffUtils.c</p>
+<p>com_cundong_utils_DiffUtils.h</p>
+<p>用于生成差分包。</p>
+<p>com_cundong_utils_PatchUtils.c</p>
+<p>com_cundong_utils_PatchUtils.h</p>
+<p>用于合成新apk文件。</p>
+<p>com_cundong_utils_DiffUtils.c 修改自 bsdiff/bsdiff.c，com_cundong_utils_PatchUtils.c修改自bsdiff/bspatch.c。</p>
+<p>我们在需要将jni中的C文件，build输出为动态链接库，以供Java调用（Window环境下生成的文件名为libApkPatchLibraryServer.dll，Unix-like系统下为libApkPatchLibraryServer.so，OSX下为libApkPatchLibraryServer.dylib）。</p>
+<p>Build成功后，将该动态链接库文件，加入环境变量，供Java语言调用。</p>
+<p>com_cundong_utils_DiffUtils.c 中 Java_com_cundong_utils_DiffUtils_genDiff() 方法，用于生成差分包的：</p>
+<p>JNIEXPORT jint JNICALL Java_com_cundong_utils_DiffUtils_genDiff(JNIEnv <em>env,<br>        jclass cls, jstring old, jstring new, jstring patch) {<br>    int argc = 4;<br>    char </em> argv[argc];<br>    argv[0] = “bsdiff”;<br>    argv[1] = (char<em>) ((</em>env)-&gt;GetStringUTFChars(env, old, 0));<br>    argv[2] = (char<em>) ((</em>env)-&gt;GetStringUTFChars(env, new, 0));<br>    argv[3] = (char<em>) ((</em>env)-&gt;GetStringUTFChars(env, patch, 0));</p>
+<pre><code>printf(&quot;old apk = %s \n&quot;, argv[1]);
+printf(&quot;new apk = %s \n&quot;, argv[2]);
+printf(&quot;patch = %s \n&quot;, argv[3]);
+
+int ret = genpatch(argc, argv);
+
+printf(&quot;genDiff result = %d &quot;, ret);
+
+(*env)-&gt;ReleaseStringUTFChars(env, old, argv[1]);
+(*env)-&gt;ReleaseStringUTFChars(env, new, argv[2]);
+(*env)-&gt;ReleaseStringUTFChars(env, patch, argv[3]);
+
+return ret;
+</code></pre><p>}</p>
+<p>com_cundong_utils_PatchUtils.c 中 Java_com_cundong_utils_PatchUtils_patch() 方法，用于合成新的APK；</p>
+<p>JNIEXPORT jint JNICALL Java_com_cundong_utils_PatchUtils_patch<br>  (JNIEnv <em>env, jclass cls,<br>            jstring old, jstring new, jstring patch){<br>    int argc = 4;<br>    char </em> argv[argc];<br>    argv[0] = “bspatch”;<br>    argv[1] = (char<em>) ((</em>env)-&gt;GetStringUTFChars(env, old, 0));<br>    argv[2] = (char<em>) ((</em>env)-&gt;GetStringUTFChars(env, new, 0));<br>    argv[3] = (char<em>) ((</em>env)-&gt;GetStringUTFChars(env, patch, 0));</p>
+<pre><code>printf(&quot;old apk = %s \n&quot;, argv[1]);
+printf(&quot;patch = %s \n&quot;, argv[3]);
+printf(&quot;new apk = %s \n&quot;, argv[2]);
+
+int ret = applypatch(argc, argv);
+
+printf(&quot;patch result = %d &quot;, ret);
+
+(*env)-&gt;ReleaseStringUTFChars(env, old, argv[1]);
+(*env)-&gt;ReleaseStringUTFChars(env, new, argv[2]);
+(*env)-&gt;ReleaseStringUTFChars(env, patch, argv[3]);
+return ret;
+</code></pre><p>}</p>
+<p>1.2 Java部分</p>
+<p>com.cundong.utils包，为调用C语言的Java实现； com.cundong.apkdiff包，为apk差分程序的Demo； com.cundong.apkpatch包，为apk合并程序的Demo；</p>
+<p>调用，com.cundong.utils.DiffUtils中genDiff()方法，可以通过传入的新旧apk路径，得到差分包。</p>
+<p>/**</p>
+<ul>
+<li>类说明：     APK Diff工具类</li>
+<li></li>
+<li>@author     Cundong</li>
+<li>@date           2013-9-6</li>
+<li><p>@version  1.0<br>*/<br>public class DiffUtils {</p>
+<p> /**</p>
+<ul>
+<li>native方法 比较路径为oldPath的apk与newPath的apk之间差异，并生成patch包，存储于patchPath</li>
+<li></li>
+<li>返回：0，说明操作成功</li>
+<li></li>
+<li>@param oldApkPath 示例:/sdcard/old.apk</li>
+<li>@param newApkPath 示例:/sdcard/new.apk</li>
+<li>@param patchPath  示例:/sdcard/xx.patch</li>
+<li>@return<br>*/<br>public static native int genDiff(String oldApkPath, String newApkPath, String patchPath);<br>}</li>
+</ul>
+</li>
+</ul>
+<p>调用，com.cundong.utils.PatchUtils中patch()方法，可以通过旧apk与差分包，合成为新apk。</p>
+<p>/**</p>
+<ul>
+<li>类说明：     APK Patch工具类</li>
+<li></li>
+<li>@author    Cundong</li>
+<li>@date          2013-9-6</li>
+<li><p>@version 1.0<br>*/<br>public class PatchUtils {</p>
+<p> /**</p>
+<ul>
+<li>native方法 使用路径为oldApkPath的apk与路径为patchPath的补丁包，合成新的apk，并存储于newApkPath</li>
+<li></li>
+<li>返回：0，说明操作成功</li>
+<li></li>
+<li>@param oldApkPath 示例:/sdcard/old.apk</li>
+<li>@param newApkPath 示例:/sdcard/new.apk</li>
+<li>@param patchPath  示例:/sdcard/xx.patch</li>
+<li>@return<br>*/<br>public static native int patch(String oldApkPath, String newApkPath,<pre><code>String patchPath);
+</code></pre>}</li>
+</ul>
+</li>
+</ul>
+<p>2.使用旧版apk与差分包，在客户端合成新apk</p>
+<p>需要在手机客户端实现，ApkPatchLibrary 工程封装了这个过程。</p>
+<p>2.1 C部分</p>
+<p>同ApkPatchLibraryServer工程一样，ApkPatchLibrary/jni/bzip2 目录中所有文件都来自bzip2项目。</p>
+<p>ApkPatchLibrary/jni/com_cundong_utils_PatchUtils.c、ApkPatchLibrary/jni/com_cundong_utils_PatchUtils.c实现文件的合并过程，其中com_cundong_utils_PatchUtils.c修改自bsdiff/bspatch.c。</p>
+<p>我们需要用NDK编译出一个libApkPatchLibrary.so文件，生成的so文件位于libs/armeabi/ 下，其他 Android 工程便可以使用该libApkPatchLibrary.so文件来合成apk（如果需要支持多种CPU架构需要自己配置）。</p>
+<p>com_cundong_utils_PatchUtils.Java_com_cundong_utils_PatchUtils_patch()方法，即为生成差分包的代码：</p>
+<p>/*</p>
+<ul>
+<li>Class:     com_cundong_utils_PatchUtils</li>
+<li>Method:    patch</li>
+<li><p>Signature: (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I<br><em>/<br>JNIEXPORT jint JNICALL Java_com_cundong_utils_PatchUtils_patch(JNIEnv </em>env,</p>
+<pre><code>jobject obj, jstring old, jstring new, jstring patch) {
+</code></pre><p> char <em> ch[4];<br> ch[0] = “bspatch”;<br> ch[1] = (char</em>) ((<em>env)-&gt;GetStringUTFChars(env, old, 0));<br> ch[2] = (char</em>) ((<em>env)-&gt;GetStringUTFChars(env, new, 0));<br> ch[3] = (char</em>) ((*env)-&gt;GetStringUTFChars(env, patch, 0));</p>
+<p> <strong>android_log_print(ANDROID_LOG_INFO, “ApkPatchLibrary”, “old = %s “, ch[1]);
+ </strong>android_log_print(ANDROID_LOG_INFO, “ApkPatchLibrary”, “new = %s “, ch[2]);<br> __android_log_print(ANDROID_LOG_INFO, “ApkPatchLibrary”, “patch = %s “, ch[3]);</p>
+<p> int ret = applypatch(4, ch);</p>
+<p> __android_log_print(ANDROID_LOG_INFO, “ApkPatchLibrary”, “applypatch result = %d “, ret);</p>
+<p> (<em>env)-&gt;ReleaseStringUTFChars(env, old, ch[1]);<br> (</em>env)-&gt;ReleaseStringUTFChars(env, new, ch[2]);<br> (*env)-&gt;ReleaseStringUTFChars(env, patch, ch[3]);</p>
+<p> return ret;<br>}</p>
+</li>
+</ul>
+<p>2.2 Java部分</p>
+<p>com.cundong.utils包，为调用C语言的Java实现；</p>
+<p>调用，com.cundong.utils.PatchUtils中patch()方法，可以通过旧apk与差分包，合成为新apk。</p>
+<p>/**</p>
+<ul>
+<li>类说明：     APK Patch工具类</li>
+<li></li>
+<li>@author   Cundong</li>
+<li>@date      2013-9-6</li>
+<li><p>@version 1.0<br>*/<br>public class PatchUtils {</p>
+<p> /**</p>
+<ul>
+<li>native方法 使用路径为oldApkPath的apk与路径为patchPath的补丁包，合成新的apk，并存储于     newApkPath</li>
+<li></li>
+<li>返回：0，说明操作成功</li>
+<li></li>
+<li>@param oldApkPath 示例:/sdcard/old.apk</li>
+<li>@param newApkPath 示例:/sdcard/new.apk</li>
+<li>@param patchPath  示例:/sdcard/xx.patch</li>
+<li>@return<br>*/<br>public static native int patch(String oldApkPath, String newApkPath,<pre><code>String patchPath);
+</code></pre>}</li>
+</ul>
+</li>
+</ul>
+<p>3.校验新合成的apk文件</p>
+<p>在执行patch之前，需要先读取本地安装旧版本APK的MD5或SHA1，判断当前安装的文件是否为合法版本，同样，patch得到新包之后，也需要对它进行MD5或SHA1校验，校验失败，说明合成过程有问题。</p>
+<p>注意事项</p>
+<p>增量更新的前提条件，是在手机客户端能让我们读取到当前应用程序安装后的源apk，如果获取不到源apk，那么就无法进行增量更新了，另外，如果你的应用程序不是很大，比如只有2、3M，那么完全没有必要使用增量更新，增量更新只适用于apk包比较大的情况，比如手机游戏客户端。</p>
+<p>一些说明</p>
+<p>ApkPatchLibraryServer：服务器端生成差分包工程，使用Java实现；</p>
+<p>ApkPatchLibrary：客户端使用的apk合成库，用于生成libApkPatchLibrary.so，使用Eclipse开发；</p>
+<p>ApkPatchLibrarySample：一个Sample，手机上安装 Weibo5.5.apk，通过与SD卡上预先存放的weibo.patch文件进行合并，得到Weibo5.6.apk，使用AndroidStudio开发。</p>
+<p>二进制差分或许有更好的实现方案，如：xdelta；</p>
+<p>另外， ApkPatchLibraryServer、ApkPatchLibrarySample 中用到的Weibo5.5.apk，Weibo5.6.apk，以及使用ApkPatchLibraryServer生成的差分包(Weibo5.5.apk-&gt;Weibo5.6.apk)， 都通过云盘共享了。</p>
+<hr>
+<p>class MainActivity : AppCompatActivity() {</p>
+<pre><code>//懒加载初始化
+private val mDialog:ProgressDialog by lazy {
+    ProgressDialog(this)
+}
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    setContentView(R.layout.activity_main)
+
+
+    btn_update.onClick {
+        //集成增量更新 https://github.com/jiyouliang2/SmartUpdateDemo
+
+
+        update()
+    }
+}
+
+//增量更新: 旧版本+patch=合并生成新版本apk
+fun update(){
+    var pm:PackageManager=packageManager
+
+    //通过命令行获取当前设备运行项目的包名: adb shell dumpsys window w |findstr \/ | findstr name=
+
+    val appInfo=pm.getApplicationInfo(&quot;com.yhfund.enterpriseappandroid&quot;,0)
+
+    //1.获取旧版本apk路径
+    var oldPath:String=appInfo.sourceDir
+
+    //2.指定patch文件保存路径
+    var patchFile= File(Environment.getExternalStorageDirectory(),&quot;toutiao.patch&quot;)
+
+    //3.设置新版本apk保留路径
+    var newApkFile=File(Environment.getExternalStorageDirectory(),&quot;toutiao_new.apk&quot;)
+    println(&quot;sdn=========getExternalStorageDirectory&quot;+Environment.getExternalStorageDirectory())
+    //手动生成增量更新so库工程: https://github.com/jiyouliang2/SmartUpdateLib
+    //4.合并生成新版本: jni
+
+
+    //子线程
+    doAsync {
+
+
+        println(&quot;sdn====oldPath=&quot;+oldPath+&quot;,newApkFile.absolutePath=&quot;+
+                newApkFile.absolutePath+&quot;,patchFile.absolutePath=&quot;+patchFile.absolutePath)
+        //合并完成:参数一-旧版本路径,参数二-新版本路径,参数三-更新包路径
+        val result=PatchUtil.patch(oldPath,newApkFile.absolutePath,patchFile.absolutePath)
+        println(&quot;sdn=========22222222222222222222222222222&quot;)
+
+        if(result==0){
+            //合并成功
+            runOnUiThread {
+            //    mDialog.dismiss()
+
+                //安装新版本apk:系统包安装器PackageInstaller
+
+                var intent= Intent()
+
+                //设置action.数据:查询系统代码,意图过滤器,清单文件
+
+
+                intent.action = &quot;android.intent.action.VIEW&quot;
+                intent.addCategory(&quot;android.intent.category.DEFAULT&quot;)
+                intent.setDataAndType(Uri.parse(&quot;file://&quot;+newApkFile.absolutePath)
+                        ,&quot;applicaton/vnd.android.package-archive&quot;)
+
+                startActivity(intent)
+
+
+
+            }
+        }
+    }
+
+    println(&quot;sdn=========333333333333333333333333333333333&quot;)
+}
+</code></pre><p>}</p>
+</div><div class="tags"></div><div class="post-nav"><a class="pre" href="/2018/10/05/2018上海安卓巴士的一些心得/">2018上海安卓巴士的一些心得</a><a class="next" href="/2018/10/01/kotlin的学习心得/">kotlin的学习心得</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank"><input type="text" name="q" maxlength="20" placeholder="Search"/><input type="hidden" name="sitesearch" value="http://yoursite.com"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> Kategorien</i></div></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> Tags</i></div><div class="tagcloud"></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> Letzte</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2018/10/05/2018上海安卓巴士的一些心得/">2018上海安卓巴士的一些心得</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/02/增量更新/">增量更新</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/01/kotlin的学习心得/">kotlin的学习心得</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/01/kotlin开发桌面窗口游戏的一些探索/">kotlin开发桌面窗口游戏的一些探索</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/01/关于翻墙代理的配置/">关于翻墙代理的配置</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/09/24/2018Android沙龙分享/">2018Android沙龙分享</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/09/23/hexo中引入图片/">hexo中引入图片</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/09/22/近期学习计划/">近期学习计划</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/09/21/msql数据库操作/">msql数据库操作</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/09/20/vue学习心得/">vue学习心得</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> Blogroll</i></div><ul></ul><a href="http://www.example1.com/" title="site-name1" target="_blank">site-name1</a><ul></ul><a href="http://www.example2.com/" title="site-name2" target="_blank">site-name2</a><ul></ul><a href="http://www.example3.com/" title="site-name3" target="_blank">site-name3</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2018 <a href="/." rel="nofollow">Hexo.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
