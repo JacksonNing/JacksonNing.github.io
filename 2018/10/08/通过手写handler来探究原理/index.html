@@ -1,0 +1,173 @@
+<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>通过手写handler来探究原理 | Hexo</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">通过手写handler来探究原理</h1><a id="logo" href="/.">Hexo</a><p class="description"></p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> Start</i></a><a href="/archives/"><i class="fa fa-archive"> Archiv</i></a><a href="/about/"><i class="fa fa-user"> Über</i></a><a href="/atom.xml"><i class="fa fa-rss"> RSS</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">通过手写handler来探究原理</h1><div class="post-meta">Oct 8, 2018</div><div class="post-content"><p>一、关于Handler<br>Handler对于我们Android开发者来说应该是再熟悉不过了，这也是在Android中最重要的消息机制，特别是在面试笔试时，Handler机制也是最常问到的话题。今天我们就来动手撸一个自己写的Handler，用java层代码方式来实现，进一步来了解Handler在线程通信过程中的作用。</p>
+<p>二、问题<br>Handler机制也可以理解为线程间的消息机制，如果我们自己来设计Handler实现线程间通信，需要怎么做呢？我们知道，在Handler机制中，最重要的几个类：Handler、Looper、MessageQueue、Message、ThreadLocal。那它们在具体实现中又有什么作用呢？</p>
+<p>三、思考<br>首先，从使用者角度来看，他的操作只有两步：</p>
+<p>在主线程创建Handler实例，并重写handleMessage方法处理消息。</p>
+<p>在子线程获取Handler的引用调用sendMessage方法发送消息，在handleMessage中即可处理该消息。</p>
+<p>那从设计者角度来看，我们要分清Handler、Looper、MessageQueue、Message、ThreadLocal这几个类都担当了什么职责：</p>
+<p>Handler 负责发送和处理消息</p>
+<p>Looper 消息泵，也就是负责取出消息交给Handler来处理。</p>
+<p>MessageQueue 消息队列，负责存取消息。</p>
+<p>Message 具体发送的消息。</p>
+<p>ThreadLocal 它主要用于做线程间的数据隔离用的，这里它在每个线程中存放各自对应的Looper。</p>
+<p>好了，简单分析完各个类的作用，那我们开始挽起袖子撸代码吧。</p>
+<p>四、实现<br>Picture</p>
+<p>1、 Handler的实现</p>
+<p>由于Handler主要负责发送和处理消息，那我们主要实现它的sendMessage、sendMessage、dispatchMessage三个方法，来处理消息的发送和接收：</p>
+<p>public class Handler {<br>      //消息队列<br>     MessageQueue mQueue;<br>      //Looper<br>     Looper mLooper;</p>
+<pre><code> public Handler() {
+     mLooper = Looper.myLooper();
+     if (mLooper == null) {
+         throw new RuntimeException(
+             &quot;Can&apos;t create handler inside thread that has not called Looper.prepare()&quot;);
+     }
+     mQueue = mLooper.mQueue;
+}
+ public final void sendMessage(Message msg){
+     MessageQueue queue = mQueue;
+     if (queue != null) {
+         msg.target = this;
+          queue.enqueueMessage(msg);
+     }else {
+         RuntimeException e = new RuntimeException(
+             this + &quot; sendMessage() called with no mQueue&quot;);
+         throw e;
+     }
+ }
+
+/**
+ * Subclasses must implement this to receive messages.
+ */
+public void handleMessage(Message msg) {
+}
+
+/**
+ * Handle system messages here.
+ */
+public void dispatchMessage(Message msg) {
+    handleMessage(msg);
+}
+</code></pre><p>}<br>我们在Handler的构造函数中获取当前线程对应的looper，并取出Looper中对应的消息队列保存在成员变量中。sendMessage方法中我们给Message的target变量赋值为this，也就是表明了Message是由当前的Handler来负责处理的，之后调用enqueueMessage方法将消息存入消息队列中。而dispatchMessage方法我们实现比较简单，负责调用handleMessage来处理消息。</p>
+<p>2、 Looper的实现</p>
+<p>Looper主要负责取出消息交由Handler处理，我们主要来实现prepare、loop方法：</p>
+<p>public class Looper {</p>
+<pre><code>// sThreadLocal.get() will return null unless you&apos;ve called prepare().
+static final ThreadLocal&lt;Looper&gt; sThreadLocal = new ThreadLocal&lt;Looper&gt;();
+MessageQueue mQueue;
+
+private Looper() {
+    mQueue = new MessageQueue();
+}
+
+public static Looper myLooper() {
+    return sThreadLocal.get();
+}
+
+public static void prepare() {
+    if (sThreadLocal.get() != null) {
+        throw new RuntimeException(
+                &quot;Only one Looper may be created per thread&quot;);
+    }
+    sThreadLocal.set(new Looper());
+}
+
+public static void loop() {
+
+    Looper me = myLooper();
+    if (me == null) {
+        throw new RuntimeException(
+                &quot;No Looper; Looper.prepare() wasn&apos;t called on this thread.&quot;);
+    }
+
+    MessageQueue queue = me.mQueue;
+
+    for (;;) {
+        Message msg = queue.next();
+        if (msg == null || msg.target == null)
+            continue;
+        //转发给handler
+        msg.target.dispatchMessage(msg);
+    }
+}
+</code></pre><p>}<br>在Looper的构造函数中我们创建了对应的消息队列来存取消息，并且在prepare方法中存入ThreadLocal当前线程的Looper，loop方法从当前线程的Looper的消息队列中取出消息，最终调用msg.target.dispatchMessage(msg)交友之前发送消息的Handler来处理消息。</p>
+<p>3、Message的实现</p>
+<p>Message的实现比较简单：</p>
+<p>public final class Message {<br>    //处理该消息的Handler<br>    Handler target;<br>    public int what;</p>
+<pre><code>public Object obj;
+
+@Override
+public String toString() {
+    return obj.toString();
+}
+</code></pre><p>}<br>4、MessageQueue消息队列的实现</p>
+<p>在消息队列的实现中我们主要考虑几个问题：</p>
+<p>用什么数据结构存放消息，存放数据大小有限制。</p>
+<p>当next()方法取出消息时，消息队列没有消息，该方法应阻塞。</p>
+<p>当enqueueMessage方法存放消息时，消息大于存放消息限制大小，应阻塞。</p>
+<p>//消息队列<br>public class MessageQueue {<br>    //互斥锁<br>    Lock lock;<br>    //条件变量<br>    Condition mEmptyQueue;<br>    Condition mFullQueue;<br>    //消息<br>    Message[] mMessages;<br>    //装入  和取出消息的下标<br>    int putIndex;<br>    int takeIndex;<br>    //记录数   用于判断是否继续生产和消费<br>    int count;<br>    public MessageQueue(){<br>        //初始化50个消息<br>        mMessages = new Message[50];<br>        lock = new ReentrantLock();<br>        //标示<br>        mEmptyQueue = lock.newCondition();<br>        mFullQueue = lock.newCondition();<br>    }<br>    //生产者 子线程<br>    final void enqueueMessage(Message msg){<br>        //添加至消息队列<br>        try{<br>            lock.lock();<br>            while(count == mMessages.length){<br>                try {<br>                    mFullQueue.await();<br>                } catch (Exception e) {<br>                    e.printStackTrace();<br>                }<br>            }<br>            mMessages[putIndex] = msg;<br>            putIndex = (++putIndex == mMessages.length ? 0 : putIndex);<br>            count++;<br>            //通知主线程继续执行<br>            mEmptyQueue.signalAll();<br>        }finally{<br>            lock.unlock();<br>        }</p>
+<pre><code>}
+//消费者  主线程
+final Message next(){
+    //取出消息
+    Message message = null;
+    try{
+        lock.lock();
+        //取到最后一个
+        while (count == 0) {
+            try {
+                mEmptyQueue.await();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+         message = mMessages[takeIndex];
+         mMessages[takeIndex] = null;
+        takeIndex = (++takeIndex == mMessages.length ? 0 : takeIndex);
+        count--;
+        //通知子线程   
+        mFullQueue.signalAll();
+    }finally{
+        lock.unlock();
+    }
+    return message;
+}
+</code></pre><p>}<br>这里的next和enqueueMessage是典型的生产者、消费者的关系，为防止出现错乱我们给两个方法都加上Lock锁，当enqueueMessage方法存放消息时如果当前队列消息满了，则调用mFullQueue.await();进行等待消息处理，当向消息队列中存放消息后，也就是说消息队列不为空了，调用mEmptyQueue.signalAll();通知next()方法来处理消息。</p>
+<p>至此，我们的Handler消息处理过程已经基本完成了，下面我们测试下看看：</p>
+<p>5、测试</p>
+<p>public class Test {</p>
+<pre><code>public static void main(String[] args) {
+    //初始化Looper
+    Looper.prepare();
+
+    final Handler hander = new Handler(){
+        public void handleMessage(Message msg) {
+            System.out.println(Thread.currentThread().getName() + &quot;--receiver--&quot; + msg.toString());
+        };
+    };
+
+    for (int i = 0; i &lt; 10; i++) {
+        new Thread(new Runnable() {
+            public void run() {
+                while (true) {
+                    Message msg = new Message();
+                    msg.what = 0;
+                    synchronized (UUID.class) {
+                        msg.obj = Thread.currentThread().getName()+&quot;--send---&quot;+UUID.randomUUID().toString();
+                    }
+                    System.out.println(msg);
+                    hander.sendMessage(msg);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }).start();
+    }
+    //开始消息循环
+    Looper.loop();
+}
+</code></pre><p>}<br>看下测试结果:</p>
+<p>Thread-0–send—e4ed9a81-3477-4f5d-a663-1d30626d93b5<br>Thread-8–send—4c403131-ec14-406c-b57b-a4943dfa93ac<br>Thread-7–send—9752a85d-9517-4607-a54f-92c2342b7a28<br>Thread-6–send—7d4ee443-3ab5-4c4e-aac5-eeafc26b78d9<br>Thread-9–send—70ba7292-1ff4-404d-974e-dfedb1a3fa71<br>Thread-4–send—614e07e6-bc39-45be-93b0-6996de7f159e<br>Thread-2–send—7bfaa831-a31b-457a-82cd-145a9d98d351<br>Thread-5–send—8ffd7327-6ddb-4088-93e6-1304fc926814<br>Thread-1–send—f6d5e373-88b0-44e9-ab51-f95808acb068<br>main–receiver–Thread-0–send—e4ed9a81-3477-4f5d-a663-1d30626d93b5<br>main–receiver–Thread-8–send—4c403131-ec14-406c-b57b-a4943dfa93ac<br>main–receiver–Thread-7–send—9752a85d-9517-4607-a54f-92c2342b7a28<br>main–receiver–Thread-6–send—7d4ee443-3ab5-4c4e-aac5-eeafc26b78d9<br>main–receiver–Thread-9–send—70ba7292-1ff4-404d-974e-dfedb1a3fa71<br>main–receiver–Thread-4–send—614e07e6-bc39-45be-93b0-6996de7f159e<br>main–receiver–Thread-2–send—7bfaa831-a31b-457a-82cd-145a9d98d351<br>main–receiver–Thread-5–send—8ffd7327-6ddb-4088-93e6-1304fc926814<br>Thread-3–send—56f8b613-99fa-4ef2-a4b9-c762c4d0cd27<br>main–receiver–Thread-1–send—f6d5e373-88b0-44e9-ab51-f95808acb068<br>main–receiver–Thread-3–send—56f8b613-99fa-4ef2-a4b9-c762c4d0cd27<br>测试成功！！我们自己的Handler也可以正常处理消息啦~</p>
+<p>五、总结<br>Handler源码的实现过程要比我们自己的复杂很多，特别是消息处理的细节，调用了底层C++的代码。但实现的整体思路和我们是一样的，通过动手实践一次，加深对Handler的理解，对我们认识和处理消息机制的问题大有裨益。</p>
+</div><div class="tags"></div><div class="post-nav"><a class="next" href="/2018/10/08/关于eventbus的一些研究/">关于eventbus的一些研究</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank"><input type="text" name="q" maxlength="20" placeholder="Search"/><input type="hidden" name="sitesearch" value="http://yoursite.com"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> Kategorien</i></div></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> Tags</i></div><div class="tagcloud"></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> Letzte</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2018/10/08/通过手写handler来探究原理/">通过手写handler来探究原理</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/08/关于eventbus的一些研究/">关于eventbus的一些研究</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/08/关于service的一些研究/">关于service的一些研究</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/08/关于音乐播放器的相关细节探究/">关于音乐播放器的相关细节探究</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/06/kotlin封装播放器心得/">kotlin封装播放器心得</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/05/2018上海安卓巴士的一些心得/">2018上海安卓巴士的一些心得</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/02/增量更新/">增量更新</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/01/kotlin的学习心得/">kotlin的学习心得</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/01/kotlin开发桌面窗口游戏的一些探索/">kotlin开发桌面窗口游戏的一些探索</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/10/01/关于翻墙代理的配置/">关于翻墙代理的配置</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> Blogroll</i></div><ul></ul><a href="http://www.example1.com/" title="site-name1" target="_blank">site-name1</a><ul></ul><a href="http://www.example2.com/" title="site-name2" target="_blank">site-name2</a><ul></ul><a href="http://www.example3.com/" title="site-name3" target="_blank">site-name3</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2018 <a href="/." rel="nofollow">Hexo.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
